@@ -10,6 +10,7 @@
 #import "NSFileHandleExt.h"
 #import "PBChangedFile.h"
 #import "PBWebChangesController.h"
+#import "NSString_RegEx.h"
 
 
 @interface PBGitCommitController (PrivateMethods)
@@ -47,23 +48,48 @@
 	[super finalize];
 }
 
+- (IBAction)signOff:(id)sender
+{
+	if (![repository.config valueForKeyPath:@"user.name"] || ![repository.config valueForKeyPath:@"user.email"])
+		return [[repository windowController] showMessageSheet:@"User's name not set" infoText:@"Signing off a commit requires setting user.name and user.email in your git config"];
+
+	commitMessageView.string = [NSString stringWithFormat:@"%@\n\nSigned-off-by: %@ <%@>",
+		commitMessageView.string,
+		[repository.config valueForKeyPath:@"user.name"],
+		[repository.config valueForKeyPath:@"user.email"]];
+}
+
 - (void) setAmend:(BOOL)newAmend
 {
 	if (newAmend == amend)
 		return;
+
 	amend = newAmend;
+	amendEnvironment = nil;
 
-	// Replace commit message with the old one if it's less than 3 characters long.
-	// This is just a random number.
-	if (amend && [[commitMessageView string] length] <= 3) {
+	// If we amend, we want to keep the author information for the previous commit
+	// We do this by reading in the previous commit, and storing the information
+	// in a dictionary. This dictionary will then later be read by [self commit:]
+	if (amend) {
 		NSString *message = [repository outputForCommand:@"cat-file commit HEAD"];
-		NSRange r = [message rangeOfString:@"\n\n"];
-		if (r.location != NSNotFound)
-			message = [message substringFromIndex:r.location + 2];
+		NSArray *match = [message substringsMatchingRegularExpression:@"\nauthor ([^\n]*) <([^\n>]*)> ([0-9]+[^\n]*)\n" count:3 options:0 ranges:nil error:nil];
+		if (match)
+			amendEnvironment = [NSDictionary dictionaryWithObjectsAndKeys:[match objectAtIndex:1], @"GIT_AUTHOR_NAME",
+				[match objectAtIndex:2], @"GIT_AUTHOR_EMAIL",
+				[match objectAtIndex:3], @"GIT_AUTHOR_DATE",
+				 nil];
 
-		commitMessageView.string = message;
+		// Replace commit message with the old one if it's less than 3 characters long.
+		// This is just a random number.
+		if ([[commitMessageView string] length] <= 3) {
+			// Find the commit message
+			NSRange r = [message rangeOfString:@"\n\n"];
+			if (r.location != NSNotFound)
+				message = [message substringFromIndex:r.location + 2];
+
+			commitMessageView.string = message;
+		}
 	}
-
 
 	[self refresh:self];
 }
@@ -145,17 +171,23 @@
 // all files previously marked as deletable
 - (void) doneProcessingIndex
 {
-	[self willChangeValueForKey:@"files"];
-	if (!--self.busy) {
-		self.status = @"Ready";
-		for (PBChangedFile *file in files) {
-			if (!file.hasStagedChanges && !file.hasUnstagedChanges) {
-				NSLog(@"Deleting file: %@", [file path]);
-				[files removeObject:file];
-			}
-		}
+	// if we're still busy, do nothing :)
+	if (--self.busy)
+		return;
+
+	NSMutableArray *deleteFiles = [NSMutableArray array];
+	for (PBChangedFile *file in files) {
+		if (!file.hasStagedChanges && !file.hasUnstagedChanges)
+			[deleteFiles addObject:file];
 	}
-	[self didChangeValueForKey:@"files"];
+
+	if ([deleteFiles count]) {
+		[self willChangeValueForKey:@"files"];
+		for (PBChangedFile *file in deleteFiles)
+			[files removeObject:file];
+		[self didChangeValueForKey:@"files"];
+	}
+	self.status = @"Ready";
 }
 
 - (void) readOtherFiles:(NSNotification *)notification;
@@ -272,32 +304,20 @@
 {
 	self.busy--;
 	self.status = [@"Commit failed: " stringByAppendingString:reason];
-	[[NSAlert alertWithMessageText:@"Commit failed"
-					 defaultButton:nil
-				   alternateButton:nil
-					   otherButton:nil
-		 informativeTextWithFormat:reason] runModal];
+	[[repository windowController] showMessageSheet:@"Commit failed" infoText:reason];
 	return;
 }
 
 - (IBAction) commit:(id) sender
 {
 	if ([[cachedFilesController arrangedObjects] count] == 0) {
-		[[NSAlert alertWithMessageText:@"No changes to commit"
-						 defaultButton:nil
-					   alternateButton:nil
-						   otherButton:nil
-			 informativeTextWithFormat:@"You must first stage some changes before committing"] runModal];
+		[[repository windowController] showMessageSheet:@"No changes to commit" infoText:@"You must first stage some changes before committing"];
 		return;
 	}		
 	
 	NSString *commitMessage = [commitMessageView string];
 	if ([commitMessage length] < 3) {
-		[[NSAlert alertWithMessageText:@"Commitmessage missing"
-						 defaultButton:nil
-					   alternateButton:nil
-						   otherButton:nil
-			 informativeTextWithFormat:@"Please enter a commit message before committing"] runModal];
+		[[repository windowController] showMessageSheet:@"Commitmessage missing" infoText:@"Please enter a commit message before committing"];
 		return;
 	}
 
@@ -336,6 +356,7 @@
 
 	NSString *commit = [repository outputForArguments:arguments
 										  inputString:commitMessage
+							   byExtendingEnvironment:amendEnvironment
 											 retValue: &ret];
 
 	if (ret || [commit length] != 40)
@@ -361,6 +382,7 @@
 	self.busy--;
 	[commitMessageView setString:@""];
 	amend = NO;
+	amendEnvironment = nil;
 	[self refresh:self];
 	self.amend = NO;
 }

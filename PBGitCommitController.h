@@ -30,6 +30,7 @@
 	// And decrease it after you have finished.
 	int busy;
 	BOOL amend;
+	NSDictionary *amendEnvironment;
 
 }
 
@@ -48,4 +49,5 @@
 
 - (IBAction) refresh:(id) sender;
 - (IBAction) commit:(id) sender;
+- (IBAction)signOff:(id)sender;
 @end

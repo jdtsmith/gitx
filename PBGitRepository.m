@@ -384,11 +384,21 @@ NSString* PBGitRepositoryErrorDomain = @"GitXErrorDomain";
 	return [PBEasyPipe outputForCommand:[PBGitBinary path] withArgs:arguments inDir: self.fileURL.path retValue: ret];
 }
 
-- (NSString*) outputForArguments:(NSArray *)arguments inputString:(NSString *)input retValue:(int *)ret;
+- (NSString*) outputForArguments:(NSArray *)arguments inputString:(NSString *)input retValue:(int *)ret
 {
 	return [PBEasyPipe outputForCommand:[PBGitBinary path]
 							   withArgs:arguments
 								  inDir:[self workingDirectory]
+							inputString:input
+							   retValue: ret];
+}
+
+- (NSString *)outputForArguments:(NSArray *)arguments inputString:(NSString *)input byExtendingEnvironment:(NSDictionary *)dict retValue:(int *)ret
+{
+	return [PBEasyPipe outputForCommand:[PBGitBinary path]
+							   withArgs:arguments
+								  inDir:[self workingDirectory]
+				 byExtendingEnvironment:dict
 							inputString:input
 							   retValue: ret];
 }
@@ -400,14 +410,21 @@ NSString* PBGitRepositoryErrorDomain = @"GitXErrorDomain";
 
 - (BOOL)executeHook:(NSString *)name withArgs:(NSArray *)arguments output:(NSString **)output
 {
-	NSString* hookPath = [[[[self fileURL] path] stringByAppendingPathComponent:@"hooks"] stringByAppendingPathComponent:name];
+	NSString *hookPath = [[[[self fileURL] path] stringByAppendingPathComponent:@"hooks"] stringByAppendingPathComponent:name];
 	if (![[NSFileManager defaultManager] isExecutableFileAtPath:hookPath])
 		return TRUE;
+
+	NSDictionary *info = [NSDictionary dictionaryWithObjectsAndKeys:
+		[self fileURL].path, @"GIT_DIR",
+		[[self fileURL].path stringByAppendingPathComponent:@"index"], @"GIT_INDEX_FILE",
+		nil
+	];
+
 	int ret = 1;
+	NSString *_output =	[PBEasyPipe outputForCommand:hookPath withArgs:arguments inDir:[self workingDirectory] byExtendingEnvironment:info inputString:nil retValue:&ret];
+
 	if (output)
-		*output = [PBEasyPipe outputForCommand:hookPath withArgs:arguments inDir:[self workingDirectory] retValue:&ret];
-	else
-		[PBEasyPipe outputForCommand:hookPath withArgs:arguments inDir:[self workingDirectory] retValue:&ret];
+		*output = _output;
 
 	return ret == 0;
 }
